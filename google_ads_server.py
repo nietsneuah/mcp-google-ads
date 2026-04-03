@@ -382,6 +382,9 @@ async def get_campaign_performance(
         customer_id: "1234567890"
         days: 14
     """
+    end_date = datetime.now().strftime('%Y-%m-%d')
+    start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+
     query = f"""
         SELECT
             campaign.id,
@@ -393,11 +396,11 @@ async def get_campaign_performance(
             metrics.conversions,
             metrics.average_cpc
         FROM campaign
-        WHERE segments.date DURING LAST_{days}_DAYS
+        WHERE segments.date BETWEEN '{start_date}' AND '{end_date}'
         ORDER BY metrics.cost_micros DESC
         LIMIT 50
     """
-    
+
     return await execute_gaql_query(customer_id, query)
 
 @mcp.tool()
@@ -428,6 +431,9 @@ async def get_ad_performance(
         customer_id: "1234567890"
         days: 14
     """
+    end_date = datetime.now().strftime('%Y-%m-%d')
+    start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+
     query = f"""
         SELECT
             ad_group_ad.ad.id,
@@ -440,11 +446,11 @@ async def get_ad_performance(
             metrics.cost_micros,
             metrics.conversions
         FROM ad_group_ad
-        WHERE segments.date DURING LAST_{days}_DAYS
+        WHERE segments.date BETWEEN '{start_date}' AND '{end_date}'
         ORDER BY metrics.impressions DESC
         LIMIT 50
     """
-    
+
     return await execute_gaql_query(customer_id, query)
 
 @mcp.tool()
@@ -466,44 +472,47 @@ async def run_gaql(
     Returns:
         Query results in the requested format
     
+    IMPORTANT: All dates must use explicit YYYY-MM-DD ranges with BETWEEN.
+    Never use date literals like LAST_30_DAYS — they are fragile and error-prone.
+
     EXAMPLE QUERIES:
-    
-    1. Basic campaign metrics:
-        SELECT 
-          campaign.name, 
-          metrics.clicks, 
+
+    1. Basic campaign metrics (last 7 days):
+        SELECT
+          campaign.name,
+          metrics.clicks,
           metrics.impressions,
           metrics.cost_micros
-        FROM campaign 
-        WHERE segments.date DURING LAST_7_DAYS
-    
+        FROM campaign
+        WHERE segments.date BETWEEN '2026-03-27' AND '2026-04-03'
+
     2. Ad group performance:
-        SELECT 
-          ad_group.name, 
-          metrics.conversions, 
+        SELECT
+          ad_group.name,
+          metrics.conversions,
           metrics.cost_micros,
           campaign.name
-        FROM ad_group 
+        FROM ad_group
         WHERE metrics.clicks > 100
-    
+
     3. Keyword analysis:
-        SELECT 
-          keyword.text, 
-          metrics.average_position, 
+        SELECT
+          keyword.text,
+          metrics.average_position,
           metrics.ctr
-        FROM keyword_view 
+        FROM keyword_view
         ORDER BY metrics.impressions DESC
-        
-    4. Get conversion data:
+
+    4. Get conversion data (last 30 days):
         SELECT
           campaign.name,
           metrics.conversions,
           metrics.conversions_value,
           metrics.cost_micros
         FROM campaign
-        WHERE segments.date DURING LAST_30_DAYS
-        
-            Note:
+        WHERE segments.date BETWEEN '2026-03-04' AND '2026-04-03'
+
+    Note:
         Cost values are in micros (millionths) of the account currency
         (e.g., 1000000 = 1 USD in a USD account)
     """
@@ -806,10 +815,9 @@ def gaql_reference() -> str:
     
     ## Common WHERE Clauses
     
-    ### Date Ranges
-    - WHERE segments.date DURING LAST_7_DAYS
-    - WHERE segments.date DURING LAST_30_DAYS
-    - WHERE segments.date BETWEEN '2023-01-01' AND '2023-01-31'
+    ### Date Ranges (always use explicit YYYY-MM-DD dates, never date literals)
+    - WHERE segments.date BETWEEN '2026-03-27' AND '2026-04-03'
+    - WHERE segments.date BETWEEN '2026-03-04' AND '2026-04-03'
     
     ### Filtering
     - WHERE campaign.status = 'ENABLED'
@@ -858,7 +866,9 @@ def gaql_help() -> str:
     """Provides assistance for writing GAQL queries."""
     return """
     I'll help you write a Google Ads Query Language (GAQL) query. Here are some examples to get you started:
-    
+
+    IMPORTANT: Always use explicit YYYY-MM-DD date ranges with BETWEEN. Never use date literals like LAST_30_DAYS.
+
     ## Get campaign performance last 30 days
     ```
     SELECT
@@ -870,10 +880,10 @@ def gaql_help() -> str:
       metrics.cost_micros,
       metrics.conversions
     FROM campaign
-    WHERE segments.date DURING LAST_30_DAYS
+    WHERE segments.date BETWEEN '2026-03-04' AND '2026-04-03'
     ORDER BY metrics.cost_micros DESC
     ```
-    
+
     ## Get keyword performance
     ```
     SELECT
@@ -884,10 +894,10 @@ def gaql_help() -> str:
       metrics.cost_micros,
       metrics.conversions
     FROM keyword_view
-    WHERE segments.date DURING LAST_30_DAYS
+    WHERE segments.date BETWEEN '2026-03-04' AND '2026-04-03'
     ORDER BY metrics.clicks DESC
     ```
-    
+
     ## Get ads with poor performance
     ```
     SELECT
@@ -899,8 +909,8 @@ def gaql_help() -> str:
       metrics.clicks,
       metrics.conversions
     FROM ad_group_ad
-    WHERE 
-      segments.date DURING LAST_30_DAYS
+    WHERE
+      segments.date BETWEEN '2026-03-04' AND '2026-04-03'
       AND metrics.impressions > 1000
       AND metrics.ctr < 0.01
     ORDER BY metrics.impressions DESC
@@ -1313,18 +1323,9 @@ async def analyze_image_assets(
         customer_id: "1234567890"
         days: 14
     """
-    # Make sure to use a valid date range format
-    # Valid formats are: LAST_7_DAYS, LAST_14_DAYS, LAST_30_DAYS, etc. (with underscores)
-    if days == 7:
-        date_range = "LAST_7_DAYS"
-    elif days == 14:
-        date_range = "LAST_14_DAYS"
-    elif days == 30:
-        date_range = "LAST_30_DAYS"
-    else:
-        # Default to 30 days if not a standard range
-        date_range = "LAST_30_DAYS"
-        
+    end_date = datetime.now().strftime('%Y-%m-%d')
+    start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+
     query = f"""
         SELECT
             asset.id,
@@ -1341,7 +1342,7 @@ async def analyze_image_assets(
             campaign_asset
         WHERE
             asset.type = 'IMAGE'
-            AND segments.date DURING LAST_30_DAYS
+            AND segments.date BETWEEN '{start_date}' AND '{end_date}'
         ORDER BY
             metrics.impressions DESC
         LIMIT 200
