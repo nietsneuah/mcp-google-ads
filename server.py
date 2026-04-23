@@ -3265,6 +3265,201 @@ async def update_shared_set_members(
         return f"Error updating shared set: {str(e)}"
 
 
+@mcp.tool()
+async def create_call_asset(
+    customer_id: str = Field(
+        description="Google Ads customer ID (10 digits, no dashes)"
+    ),
+    phone_number: str = Field(
+        description="Phone number to use in the call asset. Non-digits are stripped; any US 10-digit or 11-digit (leading 1) form works, e.g. '5139513155' or '(513) 951-3155'."
+    ),
+    country_code: str = Field(
+        default="US", description="Two-letter country code (default: US)"
+    ),
+    call_conversion_reporting_state: str = Field(
+        default="USE_RESOURCE_LEVEL_CALL_CONVERSION_ACTION",
+        description="One of USE_RESOURCE_LEVEL_CALL_CONVERSION_ACTION, USE_ACCOUNT_LEVEL_CALL_CONVERSION_ACTION, DISABLED",
+    ),
+    asset_name: str = Field(
+        default="",
+        description="Optional asset display name (auto-generated from phone if blank)",
+    ),
+) -> str:
+    """
+    Create a CALL asset (phone number) in the Google Ads account.
+
+    The returned resource name can be linked to a campaign via
+    update_campaign_call_assets. Note: call assets are immutable —
+    changing a number requires creating a new asset and swapping links.
+
+    Args:
+        customer_id: The Google Ads customer ID (10 digits, no dashes)
+        phone_number: The phone number (digits extracted automatically)
+        country_code: Two-letter ISO country code, default "US"
+        call_conversion_reporting_state: Conversion reporting setting
+        asset_name: Optional display name
+
+    Returns:
+        Success message with the new asset's resource name
+
+    Example:
+        customer_id: "4001027289"
+        phone_number: "5139513155"
+    """
+    try:
+        digits = "".join(ch for ch in phone_number if ch.isdigit())
+        if len(digits) == 11 and digits.startswith("1"):
+            digits = digits[1:]
+        if len(digits) != 10:
+            return f"Error: phone_number must contain 10 digits (got {len(digits)} from '{phone_number}')"
+
+        formatted_phone = f"({digits[0:3]}) {digits[3:6]}-{digits[6:10]}"
+
+        if not asset_name:
+            asset_name = f"Call {formatted_phone}"
+
+        creds = get_credentials()
+        headers = get_headers(creds)
+        formatted_customer_id = format_customer_id(customer_id)
+        url = f"https://googleads.googleapis.com/{API_VERSION}/customers/{formatted_customer_id}/assets:mutate"
+
+        payload = {
+            "operations": [
+                {
+                    "create": {
+                        "name": asset_name,
+                        "type": "CALL",
+                        "callAsset": {
+                            "phoneNumber": formatted_phone,
+                            "countryCode": country_code.upper(),
+                            "callConversionReportingState": call_conversion_reporting_state.upper(),
+                        },
+                    }
+                }
+            ]
+        }
+
+        response = requests.post(url, headers=headers, json=payload)
+        if response.status_code != 200:
+            return f"Error creating call asset: {response.text}"
+
+        result = response.json()
+        if not result.get("results"):
+            return f"Call asset creation returned no results: {result}"
+
+        resource_name = result["results"][0]["resourceName"]
+        return (
+            f"Successfully created call asset '{asset_name}'\n"
+            f"Resource name: {resource_name}\n"
+            f"Phone: {formatted_phone}\n"
+            f"Country: {country_code.upper()}\n"
+            f"Conversion reporting: {call_conversion_reporting_state.upper()}\n\n"
+            f"Next: link to a campaign with update_campaign_call_assets."
+        )
+
+    except Exception as e:
+        return f"Error creating call asset: {str(e)}"
+
+
+@mcp.tool()
+async def update_campaign_call_assets(
+    customer_id: str = Field(
+        description="Google Ads customer ID (10 digits, no dashes)"
+    ),
+    campaign_id: str = Field(
+        default="",
+        description="Campaign ID (digits only) to link new call assets to. Required if add_asset_resource_names is set.",
+    ),
+    add_asset_resource_names: list = Field(
+        default=None,
+        description="List of CALL asset resource names to attach to the campaign (e.g., ['customers/4001027289/assets/399999999999'])",
+    ),
+    remove_campaign_asset_resource_names: list = Field(
+        default=None,
+        description="List of campaignAsset resource names to detach (e.g., ['customers/4001027289/campaignAssets/22203438637~318208340164~CALL'])",
+    ),
+) -> str:
+    """
+    Attach or detach CALL assets to a campaign.
+
+    Use this together with create_call_asset to replace a phone number:
+      1. create_call_asset → note the new asset resource name
+      2. update_campaign_call_assets with add_asset_resource_names=[new] and
+         remove_campaign_asset_resource_names=[old campaignAsset resource name]
+
+    Args:
+        customer_id: Google Ads customer ID
+        campaign_id: Campaign ID (digits only) — required when adding
+        add_asset_resource_names: CALL asset resource names to attach
+        remove_campaign_asset_resource_names: campaignAsset resource names to detach
+
+    Returns:
+        Summary of operations performed
+
+    Example (swap broken number for new number on Carpet Cleaning - Search):
+        customer_id: "4001027289"
+        campaign_id: "22203438637"
+        add_asset_resource_names: ["customers/4001027289/assets/NEW_ASSET_ID"]
+        remove_campaign_asset_resource_names: ["customers/4001027289/campaignAssets/22203438637~318208340164~CALL"]
+    """
+    try:
+        creds = get_credentials()
+        headers = get_headers(creds)
+        formatted_customer_id = format_customer_id(customer_id)
+        url = f"https://googleads.googleapis.com/{API_VERSION}/customers/{formatted_customer_id}/campaignAssets:mutate"
+
+        operations = []
+
+        if add_asset_resource_names:
+            if not campaign_id:
+                return "Error: campaign_id is required when adding assets."
+            campaign_resource = (
+                f"customers/{formatted_customer_id}/campaigns/{campaign_id}"
+            )
+            for asset_resource in add_asset_resource_names:
+                operations.append(
+                    {
+                        "create": {
+                            "campaign": campaign_resource,
+                            "asset": asset_resource,
+                            "fieldType": "CALL",
+                        }
+                    }
+                )
+
+        if remove_campaign_asset_resource_names:
+            for ca_resource in remove_campaign_asset_resource_names:
+                operations.append({"remove": ca_resource})
+
+        if not operations:
+            return "Error: No operations. Provide add_asset_resource_names and/or remove_campaign_asset_resource_names."
+
+        payload = {"operations": operations}
+        response = requests.post(url, headers=headers, json=payload)
+
+        if response.status_code != 200:
+            return f"Error updating campaign call assets: {response.text}"
+
+        result = response.json()
+        added = len(add_asset_resource_names) if add_asset_resource_names else 0
+        removed = (
+            len(remove_campaign_asset_resource_names)
+            if remove_campaign_asset_resource_names
+            else 0
+        )
+        lines = [
+            f"Successfully updated CALL assets for customer {customer_id}",
+            f"Added: {added}, Removed: {removed}",
+            "-" * 60,
+        ]
+        for i, res in enumerate(result.get("results", []) or []):
+            lines.append(f"{i + 1}. {res.get('resourceName', 'completed')}")
+        return "\n".join(lines)
+
+    except Exception as e:
+        return f"Error updating campaign call assets: {str(e)}"
+
+
 def main():
     """Main entry point for the MCP server."""
     # Start the MCP server on stdio transport
